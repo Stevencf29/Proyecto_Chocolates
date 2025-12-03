@@ -1,0 +1,235 @@
+---
+title: "PROYECTO"
+author: "STEVEN CASTILLO 
+        JENNER ROMAN 
+        BRANDON MORALES"
+date: "2025-12-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(reticulate)
+use_python("C:/Users/steve/AppData/Local/Programs/Python/Python311/python.exe", required = TRUE)
+py_config()
+```
+
+# Introducción
+
+Este documento presenta un análisis de clustering utilizando el algoritmo UMAP (Uniform Manifold Approximation and Projection) para reducción de dimensionalidad, seguido de técnicas de clustering no supervisado para identificar al menos 3 grupos distintos en los datos.
+
+# REQ01: Fuente de datos pública aprobada
+
+Fuente seleccionada: Dataset **ChocolateSales** de Kaggle  
+https://www.kaggle.com/datasets/atharvasoundankar/chocolate-sales
+
+# REQ02: Preguntas de investigación
+
+## Pregunta 1
+¿Cómo varía la preferencia de producto entre los diferentes países registrados en el dataset y qué relación existe entre el tipo de producto y el país de origen de la venta?
+
+Variables: Producto (Nominal), País (Nominal), Canal de venta (Nominal)
+
+## Pregunta 2
+¿Cómo se distribuyen los canales de venta utilizados en cada país para la comercialización de los distintos tipos de productos de chocolate?
+
+Variables: Canal de venta (Nominal), País (Nominal), Producto (Nominal)
+
+## Pregunta 3
+¿Qué relación existe entre el país de venta, el tipo de producto y el tipo de cliente registrado en el dataset?
+
+Variables: País (Nominal), Producto (Nominal), Tipo de cliente (Nominal)
+
+# Carga de Librerías
+
+```{python}
+import re
+import numpy as np
+import pandas as pd
+import umap
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set(style="whitegrid", context="notebook")
+```
+
+# Carga y Exploración de Datos
+
+```{python}
+df = pd.read_csv("C:/UIABD/Chocolate_Sales.csv")
+
+print(f"Dimensiones: {df.shape[0]} filas x {df.shape[1]} columnas")
+print("\nPrimeras filas del dataset:")
+print(df.head())
+print("\nInformación del dataset:")
+print(df.info())
+
+for col in df.columns:
+    if df[col].dtype == "object":
+        cleaned = df[col].astype(str).str.replace(r"[^0-9.\-]", "", regex=True)
+        numeric = pd.to_numeric(cleaned, errors="coerce")
+        if numeric.notna().mean() > 0.8:
+            df[col] = numeric
+
+num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+df_num = df[num_cols].copy()
+
+print("\nColumnas numéricas usadas para clustering:")
+print(num_cols)
+
+df_num = df_num.dropna()
+print("\nFilas después de eliminar NAs:", df_num.shape[0])
+```
+
+# Preprocesamiento de Datos
+
+```{python}
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_num.values)
+```
+
+# Reducción de Dimensionalidad con UMAP
+
+```{python}
+umap_model = umap.UMAP(
+    n_neighbors=15,
+    n_components=2,
+    min_dist=0.1,
+    metric="euclidean",
+    random_state=42
+)
+
+umap_data = umap_model.fit_transform(X_scaled)
+
+df_umap = pd.DataFrame(umap_data, columns=["UMAP1", "UMAP2"])
+df_umap.index = df_num.index
+
+df_umap.head()
+```
+
+# Clustering con K-Means
+
+```{python}
+k = 3
+kmedias = KMeans(
+    n_clusters=k,
+    max_iter=2000,
+    n_init=150,
+    random_state=42
+)
+kmedias.fit(df_umap)
+
+```
+
+```{python}
+grupos = kmedias.predict(df_umap)
+df_umap["cluster"] = grupos
+df_num["cluster"] = grupos
+df_umap
+```
+
+```{python}
+print("\nDistribución de clústeres:")
+print(df_num["cluster"].value_counts().sort_index())
+```
+
+# Evaluación de la Calidad del Clustering
+
+```{python}
+sil_prom = silhouette_score(df_umap[["UMAP1", "UMAP2"]], grupos)
+print("\nCoeficiente de silueta promedio:", round(sil_prom, 4))
+```
+
+# Visualización de Clústeres en UMAP
+
+```{python}
+plt.figure(figsize=(8, 6))
+sns.scatterplot(
+    data=df_umap, x="UMAP1", y="UMAP2",
+    hue="cluster", palette="Set2", s=40, alpha=0.8
+)
+plt.title(f"Clústeres con UMAP + KMeans (k = {k})")
+plt.legend(title="Cluster")
+plt.tight_layout()
+plt.show()
+```
+
+# Mapa de Calor de Características por Clúster
+
+```{python}
+cluster_means = df_num.groupby("cluster").mean()
+
+plt.figure(figsize=(len(cluster_means.columns) * 0.6 + 3, 4))
+sns.heatmap(
+    cluster_means,
+    cmap="RdBu_r",
+    center=0,
+    annot=False,
+    cbar_kws={"label": "Valor medio (escalado o numérico)"}
+)
+plt.title("Mapa de Calor: Características por Clúster")
+plt.xlabel("Variable")
+plt.ylabel("Cluster")
+plt.tight_layout()
+plt.show()
+```
+
+# Gráfico de Radar (Spider Chart)
+
+```{python}
+cluster_means_norm = cluster_means.copy()
+for col in cluster_means_norm.columns:
+    col_min = cluster_means_norm[col].min()
+    col_max = cluster_means_norm[col].max()
+    rango = col_max - col_min
+    if rango > 0:
+        cluster_means_norm[col] = (cluster_means_norm[col] - col_min) / rango * 100
+    else:
+        cluster_means_norm[col] = 50
+
+max_vars = 12
+vars_radar = cluster_means_norm.columns[:max_vars]
+
+data_radar = cluster_means_norm[vars_radar].to_numpy()
+labels_clusters = [f"Cluster {i}" for i in cluster_means_norm.index]
+
+num_vars = len(vars_radar)
+angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+angles += angles[:1]
+
+plt.figure(figsize=(8, 6))
+ax = plt.subplot(111, polar=True)
+
+for i, (row, label) in enumerate(zip(data_radar, labels_clusters)):
+    values = row.tolist()
+    values += values[:1]
+    ax.plot(angles, values, label=label, linewidth=2)
+    ax.fill(angles, values, alpha=0.15)
+
+ax.set_xticks(angles[:-1])
+ax.set_xticklabels(vars_radar, fontsize=9)
+ax.set_yticks([0, 25, 50, 75, 100])
+ax.set_yticklabels(["0%", "25%", "50%", "75%", "100%"])
+ax.set_title("Perfil de Características por Clúster (Radar)", fontsize=13, pad=20)
+ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1.1))
+plt.tight_layout()
+plt.show()
+```
+
+# Resumen
+
+```{python}
+print("RESUMEN DEL ANÁLISIS DE CLÚSTERES")
+print("==================================\n")
+print("Algoritmo UMAP: Reducción de dimensionalidad")
+print("Algoritmo K-Means: Clustering")
+print(f"Número de clústeres: {k}")
+print(f"Coeficiente de silueta promedio: {round(sil_prom, 4)}")
+print("\nDistribución de observaciones:")
+for clust in sorted(df_num["cluster"].unique()):
+    n_obs = (df_num["cluster"] == clust).sum()
+    porcentaje = round(n_obs / len(df_num) * 100, 2)
+    print(f"  Cluster {clust}: {n_obs} observaciones ({porcentaje}%)")
+```
